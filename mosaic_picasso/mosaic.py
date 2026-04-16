@@ -3,11 +3,29 @@ import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import numpy as np
+from numpy.lib.stride_tricks import as_strided
 from scipy.optimize import minimize
 from scipy.stats import entropy
-import torchvision.transforms.functional as TF
 from joblib import Parallel, delayed
 import mosaic_picasso.utils as utils
+
+
+def _extract_patches(arr_2d, patch_size, stride):
+    """
+    将 (H, W) 数组切成 patch_size × patch_size 的块，步长为 stride。
+    返回 (n_patches, patch_size, patch_size) 数组。
+    等价于 torchvision 的 to_tensor + unfold + unfold + reshape。
+    """
+    H, W = arr_2d.shape
+    out_h = (H - patch_size) // stride + 1
+    out_w = (W - patch_size) // stride + 1
+
+    s_h, s_w = arr_2d.strides
+    shape = (out_h, out_w, patch_size, patch_size)
+    strides = (s_h * stride, s_w * stride, s_h, s_w)
+
+    patches = as_strided(arr_2d, shape=shape, strides=strides)
+    return np.ascontiguousarray(patches.reshape(-1, patch_size, patch_size)), out_h, out_w
 
 
 class MosaicPicasso:
@@ -31,11 +49,11 @@ class MosaicPicasso:
         coordinates = []
         subunit_sz, stride = self.subunit_sz, self.stride
         for i in range(2):
-            tensor_im = TF.to_tensor(img[:, :, i].astype(float))
-            patches = tensor_im.unfold(1, subunit_sz, stride).unfold(2, subunit_sz, stride)
-            chopedImg.append(patches.reshape(-1, subunit_sz, subunit_sz).numpy())
-            _, h, w, _, _ = patches.shape
-            coords = [(x * stride, y * stride) for x in range(h) for y in range(w)]
+            patches, out_h, out_w = _extract_patches(
+                img[:, :, i].astype(float), subunit_sz, stride
+            )
+            chopedImg.append(patches)
+            coords = [(x * stride, y * stride) for x in range(out_h) for y in range(out_w)]
             coordinates.append(coords)
         return np.array(chopedImg), coordinates[0]
 
